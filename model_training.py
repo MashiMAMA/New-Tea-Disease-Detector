@@ -138,7 +138,7 @@ for images, labels in train_ds.take(1):
 plt.tight_layout()
 plt.show()
 
-# === CNN MODEL (NO AUGMENTATION) ===
+#  CNN MODEL
 model = models.Sequential([
     layers.Input(shape=(256, 256, 3)),
 
@@ -160,7 +160,7 @@ model = models.Sequential([
     layers.Dense(len(class_names), activation='softmax')
 ])
 
-# === Compile Model ===
+# Compile Model
 model.compile(
     optimizer='adam',
     loss='sparse_categorical_crossentropy',
@@ -169,13 +169,13 @@ model.compile(
 
 model.summary()
 
-# === Callbacks ===
+# Callbacks 
 callbacks = [
     EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
     ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2)
 ]
 
-# === Train Model ===
+# Train Model
 train_start_time = datetime.datetime.now().isoformat()
 history = model.fit(
     train_ds,
