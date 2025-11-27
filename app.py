@@ -94,7 +94,12 @@ DISEASE_INFO = {
 
 # Grad-CAM Configuration
 IMG_SIZE = (256, 256)
-LAST_CONV_LAYER_NAME = "conv2d_2"  # Update if your model has different layer name
+# Configuration
+LAST_CONV_LAYER_NAME = "conv2d_2"  # Default: last conv layer (64x64 resolution, 128 channels)
+# Alternative options:
+# - "conv2d_1": Higher resolution (128x128, 64 channels) - better for small features
+# - "conv2d": Highest resolution (256x256, 32 channels) - very detailed but may be noisy
+
 
 def get_local_ip():
     """Get the local IP address"""
@@ -108,7 +113,7 @@ def get_local_ip():
         return "Unable to determine"
 
 def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None):
-    """Generate Grad-CAM heatmap for a given image"""
+    """Generate Grad-CAM++ heatmap for a given image with improved accuracy"""
     try:
         # Find the target layer
         last_conv_layer_idx = None
@@ -134,42 +139,83 @@ def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None
             x = layer(x)
         classifier_model = keras.Model(inputs=classifier_input, outputs=x)
         
-        # Get conv layer output and gradients
-        with tf.GradientTape() as tape:
-            conv_output = conv_model(img_array)
-            tape.watch(conv_output)
-            preds = classifier_model(conv_output)
-            if pred_index is None:
-                pred_index = tf.argmax(preds[0])
-            class_channel = preds[:, pred_index]
+        # Get conv layer output and gradients using second-order derivatives for Grad-CAM++
+        with tf.GradientTape() as tape1:
+            with tf.GradientTape() as tape2:
+                conv_output = conv_model(img_array)
+                tape2.watch(conv_output)
+                preds = classifier_model(conv_output)
+                if pred_index is None:
+                    pred_index = tf.argmax(preds[0])
+                class_channel = preds[:, pred_index]
+            
+            # First order gradient
+            grads = tape2.gradient(class_channel, conv_output)
         
-        grads = tape.gradient(class_channel, conv_output)
-        
-        # Global average pooling of gradients (importance weights)
-        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+        # Second order gradient (for Grad-CAM++)
+        second_grads = tape1.gradient(grads, conv_output)
         
         # Get values
         conv_output_value = conv_output[0].numpy()
-        pooled_grads_value = pooled_grads.numpy()
+        grads_value = grads[0].numpy()
+        
+        # Apply ReLU to gradients (Guided Grad-CAM approach)
+        # This ensures we only use positive gradients that support the prediction
+        grads_value = np.maximum(grads_value, 0)
+        
+        # Grad-CAM++: Use second-order gradients for better weighting
+        if second_grads is not None:
+            second_grads_value = second_grads[0].numpy()
+            third_grads_value = grads_value * grads_value * grads_value  # Third order approximation
+            
+            # Calculate alpha weights (spatial importance)
+            global_sum = np.sum(conv_output_value, axis=(0, 1), keepdims=True)
+            alpha_denom = second_grads_value * 2.0 + global_sum * third_grads_value + 1e-10
+            alpha = second_grads_value / alpha_denom
+            
+            # Apply ReLU to alpha
+            alpha = np.maximum(alpha, 0)
+            
+            # Weight by alpha and ReLU gradients
+            weights = np.sum(alpha * np.maximum(grads_value, 0), axis=(0, 1))
+        else:
+            # Fallback to standard Grad-CAM with guided approach
+            weights = np.mean(grads_value, axis=(0, 1))
         
         # Weight each channel by its importance
-        # CRITICAL FIX: Only use positive gradients (ReLU on gradients)
-        # This ensures we only highlight features that SUPPORT the prediction
-        for i in range(pooled_grads_value.shape[0]):
-            conv_output_value[:, :, i] *= pooled_grads_value[i]
+        for i in range(weights.shape[0]):
+            conv_output_value[:, :, i] *= weights[i]
         
         # Create heatmap by averaging weighted channels
         heatmap = np.mean(conv_output_value, axis=-1)
         
-        # CRITICAL FIX: Apply ReLU to focus on positive contributions only
-        # This removes negative values that would show "anti-features"
+        # Apply ReLU to focus on positive contributions only
         heatmap = np.maximum(heatmap, 0)
         
-        # Normalize to [0, 1] for better visualization
-        if np.max(heatmap) > 0:
-            heatmap = heatmap / np.max(heatmap)
+        # Normalize to [0, 1]
+        heatmap_max = np.max(heatmap)
+        heatmap_min = np.min(heatmap)
+        if heatmap_max > heatmap_min:
+            heatmap = (heatmap - heatmap_min) / (heatmap_max - heatmap_min)
+        else:
+            print(f"   Warning: Heatmap has no variation")
+            return None
         
-        print(f"   Heatmap stats - min: {heatmap.min():.3f}, max: {heatmap.max():.3f}, mean: {heatmap.mean():.3f}")
+        # Apply power transformation to enhance high-activation regions
+        # This makes the important regions stand out more
+        heatmap = np.power(heatmap, 0.8)  # Less than 1 enhances mid-values
+        
+        # Apply slight smoothing to reduce noise
+        heatmap = cv2.GaussianBlur(heatmap, (5, 5), 0)
+        
+        # Re-normalize after processing
+        heatmap_max = np.max(heatmap)
+        if heatmap_max > 0:
+            heatmap = heatmap / heatmap_max
+        
+        print(f"   Heatmap stats - min: {heatmap.min():.3f}, max: {heatmap.max():.3f}, mean: {heatmap.mean():.3f}, std: {heatmap.std():.3f}")
+        print(f"   Heatmap shape: {heatmap.shape}")
+        print(f"   Using layer: {last_conv_layer_name}")
         
         return heatmap
     
@@ -178,27 +224,53 @@ def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None
         traceback.print_exc()
         return None
 
-def create_gradcam_overlay(img_array_original, heatmap, alpha=0.5):
-    """Overlay Grad-CAM heatmap on original image"""
+def create_gradcam_overlay(img_array_original, heatmap, original_image_array=None, alpha=0.6):
+    """Overlay Grad-CAM heatmap on original image with improved visualization
+    
+    Args:
+        img_array_original: 256x256 normalized image used for model inference
+        heatmap: Grad-CAM heatmap (smaller than 256x256)
+        original_image_array: Original image array with true aspect ratio (optional)
+        alpha: Blending factor for overlay
+    """
     try:
-        # img_array_original is already 256x256x3 normalized to [0,1]
-        img = (img_array_original * 255).astype(np.uint8)
+        # Use original aspect ratio image if provided, otherwise use 256x256
+        if original_image_array is not None:
+            img = original_image_array.copy()
+            print(f"   Using original image shape: {img.shape}")
+        else:
+            # Fallback to 256x256 image
+            img = (img_array_original * 255).astype(np.uint8)
+            print(f"   Using model input image shape: {img.shape}")
         
-        # Resize heatmap to match image size
-        heatmap_resized = cv2.resize(heatmap, (IMG_SIZE[1], IMG_SIZE[0]))
+        print(f"   Heatmap shape before resize: {heatmap.shape}")
+        
+        # Resize heatmap to match the target image size using high-quality interpolation
+        heatmap_resized = cv2.resize(heatmap, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_CUBIC)
+        
+        # Normalize heatmap to [0, 1] if not already
+        if heatmap_resized.max() > 0:
+            heatmap_resized = heatmap_resized / heatmap_resized.max()
         
         # Convert heatmap to 0-255 range
         heatmap_uint8 = np.uint8(255 * heatmap_resized)
         
         # Apply colormap (JET: blue=low importance, red=high importance)
         heatmap_colored = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
+        
+        # Convert BGR to RGB (OpenCV uses BGR by default)
         heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
         
-        # Blend: more alpha = more heatmap visibility
-        # Improved blending for better visibility
+        # Create the overlay with weighted blending
+        # Higher alpha = more heatmap visibility
         superimposed_img = cv2.addWeighted(img, 1 - alpha, heatmap_colored, alpha, 0)
         
-        print(f"   Overlay created with alpha={alpha}")
+        # Optional: Enhance contrast for better visibility
+        # Clip values to ensure they're in valid range
+        superimposed_img = np.clip(superimposed_img, 0, 255).astype(np.uint8)
+        
+        print(f"   Overlay created - alpha={alpha}, output shape: {superimposed_img.shape}")
+        print(f"   Output range: [{superimposed_img.min()}, {superimposed_img.max()}]")
         
         return superimposed_img
     
@@ -208,26 +280,36 @@ def create_gradcam_overlay(img_array_original, heatmap, alpha=0.5):
         return None
 
 def preprocess_image(image_bytes):
-    """Preprocess image to match model input requirements"""
+    """Preprocess image to match model input requirements, returns original image too"""
     try:
         img = Image.open(io.BytesIO(image_bytes))
         print(f"   Original image mode: {img.mode}, size: {img.size}")
         
+        # Store original image
+        original_img = img.copy()
+        
         if img.mode != 'RGB':
             img = img.convert('RGB')
+            original_img = original_img.convert('RGB')
             print(f"   Converted to RGB")
         
-        img = img.resize((256, 256))
-        img_array = np.array(img)
+        # Resize to model input size (256x256) for inference
+        img_resized = img.resize((256, 256), Image.Resampling.LANCZOS)
+        img_array = np.array(img_resized)
         img_array = img_array.astype('float32') / 255.0
         img_array_with_batch = np.expand_dims(img_array, axis=0)
         
-        print(f"   Final shape: {img_array_with_batch.shape}")
-        return img_array_with_batch, img_array
+        # Also return original image as numpy array for proper aspect ratio overlay
+        original_array = np.array(original_img)
+        
+        print(f"   Original size: {original_img.size}, Model input: {img_resized.size}")
+        print(f"   Batch shape: {img_array_with_batch.shape}")
+        return img_array_with_batch, img_array, original_array
     
     except Exception as e:
         print(f"   ✗ Preprocessing error: {e}")
         traceback.print_exc()
+        raise
         raise
 
 def image_to_base64(img_array):
@@ -283,7 +365,7 @@ def predict():
         print(f"📸 Received image: {image_file.filename}")
         
         image_bytes = image_file.read()
-        processed_image, _ = preprocess_image(image_bytes)
+        processed_image, _, _ = preprocess_image(image_bytes)
         
         predictions = model.predict(processed_image, verbose=0)
         predicted_class_idx = np.argmax(predictions[0])
@@ -338,11 +420,18 @@ def predict_with_gradcam():
         if image_file.filename == '':
             return jsonify({"success": False, "error": "Empty filename"}), 400
         
+        # Get optional layer parameter for experimentation
+        # Options: conv2d (256x256), conv2d_1 (128x128), conv2d_2 (64x64 - default)
+        layer_name = request.form.get('layer', LAST_CONV_LAYER_NAME)
+        if layer_name not in ['conv2d', 'conv2d_1', 'conv2d_2']:
+            layer_name = LAST_CONV_LAYER_NAME
+        
         print(f"📸 Received image: {image_file.filename}")
+        print(f"🎯 Using Grad-CAM layer: {layer_name}")
         
         # Preprocess image
         image_bytes = image_file.read()
-        processed_image, img_array_original = preprocess_image(image_bytes)
+        processed_image, img_array_original, original_img_array = preprocess_image(image_bytes)
         
         # Make prediction
         print("\n🤖 Making prediction...")
@@ -355,13 +444,14 @@ def predict_with_gradcam():
         
         print(f"✓ Prediction: {display_name} ({confidence*100:.2f}%)")
         
-        # Generate Grad-CAM
-        print("\n🔥 Generating Grad-CAM heatmap...")
-        heatmap = make_gradcam_heatmap(processed_image, model, LAST_CONV_LAYER_NAME, predicted_class_idx)
+        # Generate Grad-CAM with selected layer
+        print(f"\n🔥 Generating Grad-CAM heatmap with {layer_name}...")
+        heatmap = make_gradcam_heatmap(processed_image, model, layer_name, predicted_class_idx)
         
         gradcam_image_base64 = None
         if heatmap is not None:
-            overlay_img = create_gradcam_overlay(img_array_original, heatmap)
+            # Use original image array to preserve aspect ratio
+            overlay_img = create_gradcam_overlay(img_array_original, heatmap, original_img_array)
             if overlay_img is not None:
                 gradcam_image_base64 = image_to_base64(overlay_img)
                 print("✓ Grad-CAM generated successfully")
@@ -420,19 +510,19 @@ if __name__ == '__main__':
     local_ip = get_local_ip()
     
     print(f"\n📍 For Android EMULATOR:")
-    print(f"   http://10.0.2.2:5000")
+    print(f"   http://10.0.2.2:5001")
     
     print(f"\n📍 For PHYSICAL DEVICE:")
-    print(f"   http://{local_ip}:5000")
+    print(f"   http://{local_ip}:5001")
     
     print(f"\n🌐 Test in browser:")
-    print(f"   http://localhost:5000")
+    print(f"   http://localhost:5001")
     
     print("\n" + "=" * 60)
     print("Starting server...")
     print("=" * 60 + "\n")
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=True)
 
 
 

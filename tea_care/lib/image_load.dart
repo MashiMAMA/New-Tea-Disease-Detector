@@ -1,13 +1,14 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:tea_care/api_config.dart';
 import 'dart:typed_data';
 
 class ImageLoadScreen extends StatefulWidget {
-  final File imageFile;
+  final XFile imageFile;
 
   const ImageLoadScreen({super.key, required this.imageFile});
 
@@ -26,11 +27,20 @@ class _ImageLoadScreenState extends State<ImageLoadScreen> {
   Map<String, double>? _allPredictions;
   Uint8List? _gradcamImage; // Store Grad-CAM heatmap image
   bool _showGradCAM = true; // Toggle between original and Grad-CAM
+  Uint8List? _imageBytes; // Store image bytes for display
 
   @override
   void initState() {
     super.initState();
     ApiConfig.printConfig();
+    _loadImageBytes();
+  }
+
+  Future<void> _loadImageBytes() async {
+    final bytes = await widget.imageFile.readAsBytes();
+    setState(() {
+      _imageBytes = bytes;
+    });
   }
 
   Future<void> _detectDisease() async {
@@ -50,14 +60,17 @@ class _ImageLoadScreenState extends State<ImageLoadScreen> {
         Uri.parse('${ApiConfig.baseUrl}/predict_with_gradcam'),
       );
 
+      // Read file bytes and add to request
+      final bytes = await widget.imageFile.readAsBytes();
       request.files.add(
-        await http.MultipartFile.fromPath(
+        http.MultipartFile.fromBytes(
           'image',
-          widget.imageFile.path,
+          bytes,
+          filename: widget.imageFile.name,
         ),
       );
 
-      print("📸 Image path: ${widget.imageFile.path}");
+      print("📸 Image name: ${widget.imageFile.name}");
 
       var streamedResponse = await request.send().timeout(
         ApiConfig.timeout,
@@ -107,15 +120,6 @@ class _ImageLoadScreenState extends State<ImageLoadScreen> {
         });
         print("✗ Server error: $_errorMessage");
       }
-    } on SocketException catch (e) {
-      setState(() {
-        _errorMessage = 'Network error: Cannot reach server.\n\n'
-            'Make sure:\n'
-            '• Flask server is running\n'
-            '• You are using correct IP in api_config.dart\n'
-            '• Phone and PC are on same WiFi';
-      });
-      print("✗ Socket error: $e");
     } on TimeoutException catch (e) {
       setState(() {
         _errorMessage = 'Connection timeout.\n\n'
@@ -125,7 +129,15 @@ class _ImageLoadScreenState extends State<ImageLoadScreen> {
       print("✗ Timeout error: $e");
     } catch (e) {
       setState(() {
-        _errorMessage = 'Error: ${e.toString()}';
+        if (e.toString().contains('XMLHttpRequest')) {
+          _errorMessage = 'Network error: Cannot reach server.\n\n'
+              'Make sure:\n'
+              '• Flask server is running at ${ApiConfig.baseUrl}\n'
+              '• CORS is enabled on the server\n'
+              '• Check browser console for more details';
+        } else {
+          _errorMessage = 'Error: ${e.toString()}';
+        }
       });
       print("✗ Unexpected error: $e");
     } finally {
@@ -222,65 +234,83 @@ class _ImageLoadScreenState extends State<ImageLoadScreen> {
             alignment: Alignment.center,
           ),
           // Image display with Grad-CAM toggle
-          ClipRRect(
-            borderRadius: const BorderRadius.only(
-              bottomLeft: Radius.circular(24),
-              bottomRight: Radius.circular(24),
-            ),
-            child: Stack(
-              children: [
-                // Original or Grad-CAM image
-                if (_showGradCAM && _gradcamImage != null)
-                  Image.memory(
-                    _gradcamImage!,
-                    height: MediaQuery.of(context).size.height * 0.45,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                  )
-                else
-                  Image.file(
-                    widget.imageFile,
-                    height: MediaQuery.of(context).size.height * 0.45,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                  ),
-
-                // Label overlay
-                if (_gradcamImage != null)
-                  Positioned(
-                    bottom: 8,
-                    left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
+          Container(
+            height: MediaQuery.of(context).size.height * 0.45,
+            width: double.infinity,
+            color: Colors.grey[900],
+            child: ClipRRect(
+              borderRadius: const BorderRadius.only(
+                bottomLeft: Radius.circular(24),
+                bottomRight: Radius.circular(24),
+              ),
+              child: Stack(
+                children: [
+                  // Original or Grad-CAM image
+                  if (_showGradCAM && _gradcamImage != null)
+                    Center(
+                      child: Image.memory(
+                        _gradcamImage!,
+                        height: MediaQuery.of(context).size.height * 0.45,
+                        width: double.infinity,
+                        fit: BoxFit.contain, // Changed from cover to contain
                       ),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.7),
-                        borderRadius: BorderRadius.circular(20),
+                    )
+                  else if (_imageBytes != null)
+                    Center(
+                      child: Image.memory(
+                        _imageBytes!,
+                        height: MediaQuery.of(context).size.height * 0.45,
+                        width: double.infinity,
+                        fit: BoxFit.contain, // Changed from cover to contain
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _showGradCAM ? Icons.crisis_alert : Icons.image,
-                            color: Colors.white,
-                            size: 16,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            _showGradCAM ? 'Grad-CAM View' : 'Original Image',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
+                    )
+                  else
+                    Container(
+                      height: MediaQuery.of(context).size.height * 0.45,
+                      width: double.infinity,
+                      color: Colors.grey[300],
+                      child: const Center(
+                        child: CircularProgressIndicator(),
                       ),
                     ),
-                  ),
-              ],
+
+                  // Label overlay
+                  if (_gradcamImage != null)
+                    Positioned(
+                      bottom: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.7),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _showGradCAM ? Icons.crisis_alert : Icons.image,
+                              color: Colors.white,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _showGradCAM ? 'Grad-CAM View' : 'Original Image',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
           // Results container

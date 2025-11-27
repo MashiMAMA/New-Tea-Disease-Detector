@@ -1,4 +1,6 @@
 // lib/api_config.dart
+import 'package:flutter/foundation.dart' show kIsWeb;
+
 class ApiConfig {
   // IMPORTANT: Set this based on your device
   // true = Android Emulator
@@ -12,6 +14,11 @@ class ApiConfig {
   static const int port = 5000;
 
   static String get baseUrl {
+    // Web always uses localhost
+    if (kIsWeb) {
+      return "http://localhost:$port";
+    }
+    // Mobile uses emulator or physical device IP
     if (isEmulator) {
       return "http://10.0.2.2:$port";
     } else {

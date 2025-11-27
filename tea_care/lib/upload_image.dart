@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:tea_care/image_load.dart';
 
 class UploadImageScreen extends StatefulWidget {
@@ -15,19 +15,28 @@ class _UploadImageScreenState extends State<UploadImageScreen> {
   final ImagePicker _picker = ImagePicker();
 
   Future<void> _pickImage(ImageSource source) async {
+    // On web, camera is not supported, only gallery
+    if (kIsWeb && source == ImageSource.camera) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Camera not supported on web. Please select from files.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     final pickedFile = await _picker.pickImage(source: source);
     if (pickedFile != null) {
-      File selectedImage = File(pickedFile.path);
-
-      //navigation
+      //navigation - pass XFile instead of File
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => ImageLoadScreen(imageFile: selectedImage),
+          builder: (context) => ImageLoadScreen(imageFile: pickedFile),
         ),
       );
 
-      print("Image selected: ${selectedImage.path}");
+      print("Image selected: ${pickedFile.path}");
     } else {
       print("No image selected.");
     }
