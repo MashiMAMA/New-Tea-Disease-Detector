@@ -11,166 +11,151 @@ class UploadImageScreen extends StatefulWidget {
 }
 
 class _UploadImageScreenState extends State<UploadImageScreen> {
-  bool showOptions = false;
   final ImagePicker _picker = ImagePicker();
 
   Future<void> _pickImage(ImageSource source) async {
+    Navigator.pop(context); // Close bottom sheet first
     final pickedFile = await _picker.pickImage(source: source);
     if (pickedFile != null) {
       File selectedImage = File(pickedFile.path);
-
-      //navigation
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => ImageLoadScreen(imageFile: selectedImage),
         ),
       );
-
-      print("Image selected: ${selectedImage.path}");
-    } else {
-      print("No image selected.");
     }
+  }
+
+  void _showImagePickerOptions() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+      ),
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                "Select Image Source",
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 20),
+              ListTile(
+                leading: const Icon(Icons.camera_alt, color: Color(0xFF277B53)),
+                title: const Text("Take a Photo"),
+                onTap: () => _pickImage(ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo, color: Color(0xFF277B53)),
+                title: const Text("Choose from Gallery"),
+                onTap: () => _pickImage(ImageSource.gallery),
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      body: Stack(
+      body: Column(
         children: [
-          SafeArea(
-            child: Column(
-              children: [
-                // Top green bar
-                Container(
-                  height: 50,
-                  color: const Color(0xFF277B53),
-                  alignment: Alignment.center,
-                ),
+          // Simple Header - extends to top
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.only(
+              top: MediaQuery.of(context).padding.top + 40,
+              bottom: 20,
+            ),
+            color: const Color(0xFF277B53),
+          ),
 
-                const SizedBox(height: 50),
+          const Spacer(),
 
-                Center(
-                  child: Transform.translate(
-                    offset: const Offset(0, 40),
-                    child: Image.asset(
-                      'images/logo2.png',
-                      height: 230,
-                      width: 230,
-                    ),
-                  ),
-                ),
+          // Logo
+          Image.asset(
+            "images/logo2.png",
+            height: 250,
+          ),
 
-                // Tagline
-                const Text(
-                  "Smarter Detection\nHealthier Leaves | Better Yields",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.black54,
-                  ),
-                ),
-
-                const SizedBox(height: 50),
-
-                // Upload Button
-                SizedBox(
-                  width: 200,
-                  height: 50,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      setState(() {
-                        showOptions = !showOptions;
-                      });
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF277B53),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    child: const Text(
-                      "Upload Image",
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ),
-
-                const Spacer(),
-
-                // Bottom image
-                Expanded(
-                  child: Transform.translate(
-                    offset: const Offset(0, 0), // move up by 40px
-                    child: Image.asset(
-                      'images/tt2.png',
-                      fit: BoxFit.cover,
-                      width: double.infinity,
-                    ),
-                  ),
-                ),
-              ],
+          // Tagline
+          const Text(
+            "Smarter Detection",
+            style: TextStyle(
+              fontSize: 16,
+              color: Color(0xFF277B53),
+              fontWeight: FontWeight.w600,
             ),
           ),
 
-          // Sliding buttons
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 500),
-            curve: Curves.easeOut,
-            bottom:
-                showOptions ? MediaQuery.of(context).size.height * 0.25 : -150,
-            left: 32,
-            right: 32,
-            child: AnimatedOpacity(
-              duration: const Duration(milliseconds: 500),
-              opacity: showOptions ? 1.0 : 0.0,
-              child: Column(
+          const SizedBox(height: 4),
+
+          const Text(
+            "Healthier Leaves | Better Yields",
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.black54,
+            ),
+          ),
+
+          const SizedBox(height: 50),
+
+          // Upload Button
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40),
+            child: ElevatedButton(
+              onPressed: _showImagePickerOptions,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF277B53),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 2,
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  ElevatedButton(
-                    onPressed: () => _pickImage(ImageSource.camera),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color.fromARGB(255, 39, 123, 83),
-                      foregroundColor: const Color.fromARGB(255, 254, 254, 254),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 32,
-                        vertical: 14,
-                      ),
+                  Text(
+                    "Upload Image",
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
                     ),
-                    child: const Text('Take a Photo'),
-                  ),
-                  const SizedBox(height: 12),
-                  ElevatedButton(
-                    onPressed: () => _pickImage(ImageSource.gallery),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color.fromARGB(255, 39, 123, 83),
-                      foregroundColor: const Color.fromARGB(255, 255, 255, 255),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 14,
-                      ),
-                    ),
-                    child: const Text('Choose a Photo from Gallery'),
                   ),
                 ],
               ),
             ),
           ),
+
+          const Spacer(flex: 2),
         ],
       ),
     );
   }
 }
+
+
+
+
+
+
+
+
+
+
 
 // import 'package:flutter/material.dart';
 // import 'package:image_picker/image_picker.dart';
